@@ -41,7 +41,7 @@ ENV/
 *.key
 *.crt
 *.env
-config/*.json
+config/*
 !config/example.env
 !config/example_llm_config.json
 

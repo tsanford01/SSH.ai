@@ -30,77 +30,82 @@ from .ui.settings_dialog import SettingsDialog
 class MainWindow(QMainWindow):
     """Main application window."""
     
-    def __init__(self) -> None:
-        """Initialize main window."""
+    def __init__(self, llm_manager: Optional[LLMManager] = None) -> None:
+        """
+        Initialize main window.
+        
+        Args:
+            llm_manager: Optional LLM manager instance. If None, creates a new one.
+        """
         super().__init__()
         
         logging.info("Initializing MainWindow...")
         
-        # Initialize managers
-        self.llm = LLMManager()
-        logging.info("LLMManager initialized.")
-        self.session_manager = SessionManager(self.llm)
-        logging.info("SessionManager initialized.")
-        
-        # Set up UI
-        self.setWindowTitle("SSH.ai")
-        self.resize(1200, 800)
-        logging.info("UI setup complete.")
-        
-        # Create central widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        logging.info("Central widget set.")
-        
-        # Create main layout
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        logging.info("Main layout created.")
-        
-        # Create horizontal splitter for main content
-        content_splitter = QSplitter(Qt.Orientation.Horizontal)
-        logging.info("Content splitter created.")
-        
-        # Create connection sidebar
-        self.connection_sidebar = ConnectionSidebar(self.session_manager)
-        content_splitter.addWidget(self.connection_sidebar)
-        logging.info("ConnectionSidebar added.")
-        
-        # Create terminal tabs
-        self.terminal_tabs = TerminalTabs()
-        content_splitter.addWidget(self.terminal_tabs)
-        logging.info("TerminalTabs added.")
-        
-        # Create suggestion panel
-        self.suggestion_panel = SuggestionPanel(self.llm, self)
-        content_splitter.addWidget(self.suggestion_panel)
-        logging.info("SuggestionPanel added.")
-        
-        # Set initial sizes for splitter
-        content_splitter.setSizes([250, 700, 250])  # Sidebar, Terminal, Suggestions
-        logging.info("Splitter sizes set.")
-        
-        # Add splitter to main layout
-        main_layout.addWidget(content_splitter)
-        logging.info("Content splitter added to main layout.")
-        
-        # Create status bar
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        logging.info("Status bar created.")
-        
-        # Create menu bar
-        self._create_menus()
-        logging.info("Menu bar created.")
-        
-        # Connect signals
-        self._connect_signals()
-        logging.info("UI signals connected.")
-        
-        self.raise_()
-        self.activateWindow()
-        logging.info("MainWindow initialized successfully.")
+        try:
+            # Initialize managers
+            self.llm = llm_manager or LLMManager()
+            logging.info("Using provided LLMManager" if llm_manager else "Created new LLMManager")
+            
+            self.session_manager = SessionManager(self.llm)
+            logging.info("SessionManager initialized")
+            
+            # Set up UI
+            self.setWindowTitle("SSH.ai")
+            self.resize(1200, 800)
+            
+            # Create central widget
+            central_widget = QWidget()
+            self.setCentralWidget(central_widget)
+            
+            # Create main layout
+            main_layout = QVBoxLayout(central_widget)
+            main_layout.setContentsMargins(0, 0, 0, 0)
+            main_layout.setSpacing(0)
+            
+            # Create horizontal splitter for main content
+            content_splitter = QSplitter(Qt.Orientation.Horizontal)
+            
+            try:
+                # Create connection sidebar
+                self.connection_sidebar = ConnectionSidebar(self.session_manager)
+                content_splitter.addWidget(self.connection_sidebar)
+                logging.info("ConnectionSidebar initialized")
+                
+                # Create terminal tabs
+                self.terminal_tabs = TerminalTabs()
+                content_splitter.addWidget(self.terminal_tabs)
+                logging.info("TerminalTabs initialized")
+                
+                # Create suggestion panel
+                self.suggestion_panel = SuggestionPanel(self.llm, self)
+                content_splitter.addWidget(self.suggestion_panel)
+                logging.info("SuggestionPanel initialized")
+            except Exception as e:
+                logging.error(f"Failed to initialize UI components: {e}")
+                raise
+            
+            # Set initial sizes for splitter
+            content_splitter.setSizes([250, 700, 250])  # Sidebar, Terminal, Suggestions
+            
+            # Add splitter to main layout
+            main_layout.addWidget(content_splitter)
+            
+            # Create status bar
+            self.status_bar = QStatusBar()
+            self.setStatusBar(self.status_bar)
+            self.status_bar.showMessage("Ready")
+            
+            # Create menu bar and connect signals
+            self._create_menus()
+            self._connect_signals()
+            
+            self.raise_()
+            self.activateWindow()
+            logging.info("MainWindow initialized successfully")
+            
+        except Exception as e:
+            logging.error(f"Failed to initialize MainWindow: {e}")
+            raise
     
     def _create_menus(self) -> None:
         """Create menu bar and menus."""
@@ -181,8 +186,32 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _new_connection(self) -> None:
         """Show new connection dialog."""
-        # TODO: Implement connection dialog
-        pass
+        from .ui.connection_dialog import ConnectionDialog
+        
+        try:
+            dialog = ConnectionDialog(self)
+            if dialog.exec():
+                credentials = dialog.get_credentials()
+                if credentials:
+                    # Create new session
+                    session = self.session_manager.create_session(credentials)
+                    if session:
+                        self.connection_sidebar.add_session(session)
+                        self.terminal_tabs.activate_session(session)
+                        self.status_bar.showMessage(f"Connected to {credentials.hostname}")
+                    else:
+                        QMessageBox.critical(
+                            self,
+                            "Connection Error",
+                            f"Failed to create session for {credentials.hostname}"
+                        )
+        except Exception as e:
+            logging.error(f"Error creating new connection: {e}")
+            QMessageBox.critical(
+                self,
+                "Connection Error",
+                f"Failed to create connection: {e}"
+            )
     
     @pyqtSlot()
     def _show_settings(self) -> None:

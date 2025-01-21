@@ -15,6 +15,7 @@ import requests
 import time
 import json
 import threading
+import aiohttp
 
 from .prompt_templates import PromptTemplate, PromptType, Context
 from .command_parser import CommandParser, ParsedCommand
@@ -347,14 +348,15 @@ class LLMManager:
             return False
             
         try:
-            response = requests.get(f"{self.base_url}/health")
-            print(f"Health check response: {response.status_code}")
-            if response.status_code == 200:
-                health_data = response.json()
-                print(f"Health data: {health_data}")
-            return response.status_code == 200
-        except requests.exceptions.RequestException as e:
-            print(f"Connection test error: {e}")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.base_url}/health") as response:
+                    logging.info(f"Health check response: {response.status}")
+                    if response.status == 200:
+                        health_data = await response.json()
+                        logging.info(f"Health data: {health_data}")
+                    return response.status == 200
+        except Exception as e:
+            logging.error(f"Connection test error: {e}")
             return False
 
     async def get_intelligent_suggestions(

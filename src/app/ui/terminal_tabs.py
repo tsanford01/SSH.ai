@@ -21,6 +21,8 @@ class TerminalTabs(QWidget):
     
     # Signals
     session_closed = pyqtSignal(Session)  # Emitted when a session is closed
+    command_executed = pyqtSignal(str, str)  # Emitted when a command is executed (command, output)
+    error_occurred = pyqtSignal(str)  # Emitted when an error occurs
     
     def __init__(self) -> None:
         """Initialize terminal tabs."""
@@ -44,6 +46,47 @@ class TerminalTabs(QWidget):
         
         # Add welcome tab
         self._add_welcome_tab()
+    
+    def execute_command(self, command: str) -> None:
+        """
+        Execute a command in the current terminal.
+        
+        Args:
+            command: Command to execute
+        """
+        current_index = self.tab_widget.currentIndex()
+        if current_index in self.terminals:
+            terminal = self.terminals[current_index]
+            terminal.execute_command(command)
+    
+    def activate_session(self, session: Session) -> None:
+        """
+        Activate a session tab or create a new one if it doesn't exist.
+        
+        Args:
+            session: Session to activate
+        """
+        # Check if session already has a tab
+        for index, terminal in self.terminals.items():
+            if terminal.session == session:
+                self.tab_widget.setCurrentIndex(index)
+                return
+        
+        # Create new terminal for session
+        self.add_terminal(session)
+    
+    def close_session(self, session: Session) -> None:
+        """
+        Close a session's tab.
+        
+        Args:
+            session: Session to close
+        """
+        # Find and close the session's tab
+        for index, terminal in self.terminals.items():
+            if terminal.session == session:
+                self._close_tab(index)
+                break
     
     def add_terminal(self, session: Session) -> None:
         """

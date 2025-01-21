@@ -11,11 +11,16 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QLabel,
     QMenu,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint
 from PyQt6.QtGui import QAction, QIcon
+import logging
+import socket
 
 from ..core.session_manager import SessionManager, Session
+from ..core.ssh_connection import SSHCredentials
+from ..ui.connection_dialog import ConnectionDialog
 
 class ConnectionSidebar(QWidget):
     """Sidebar for managing SSH connections."""
@@ -145,8 +150,37 @@ class ConnectionSidebar(QWidget):
     
     def _new_connection(self) -> None:
         """Show new connection dialog."""
-        # TODO: Implement connection dialog
-        pass
+        logging.info("New Connection button clicked.")
+        dialog = ConnectionDialog(self)
+        if dialog.exec():
+            logging.info("ConnectionDialog accepted.")
+            # Validate input fields
+            if not dialog.hostname_edit.text() or not dialog.username_edit.text():
+                QMessageBox.warning(self, "Invalid Input", "Hostname and username cannot be empty.")
+                return
+            try:
+                # Retrieve credentials from dialog
+                credentials = SSHCredentials(
+                    hostname=dialog.hostname_edit.text(),
+                    port=int(dialog.port_edit.text()),
+                    username=dialog.username_edit.text(),
+                    password=dialog.password_edit.text(),
+                    key_filename=dialog.key_file_edit.text() or None
+                )
+                # Add new session or connection logic here
+                self.session_manager.create_session(credentials)
+                # Refresh the UI or notify the user
+                self.add_saved_connection(
+                    name=f"{credentials.username}@{credentials.hostname}",
+                    hostname=credentials.hostname,
+                    username=credentials.username
+                )
+            except ValueError as ve:
+                QMessageBox.critical(self, "Connection Error", f"Invalid port number: {ve}")
+            except socket.gaierror as ge:
+                self.hostname_error.setText(f"Failed to resolve hostname: {ge}")
+            except Exception as e:
+                QMessageBox.critical(self, "Connection Error", f"An error occurred: {e}")
     
     def _handle_item_double_click(self, item: QTreeWidgetItem) -> None:
         """

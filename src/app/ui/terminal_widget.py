@@ -2,7 +2,7 @@
 Terminal emulator widget for SSH sessions.
 """
 
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QProcess
 from PyQt6.QtGui import QFont, QPalette, QColor, QTextCursor, QKeyEvent
@@ -83,12 +83,33 @@ class TerminalWidget(QWidget):
 
 class TerminalDisplay(QTextEdit):
     """Terminal display widget."""
-
+    
+    # Signal emitted when a command is entered
+    command_entered = pyqtSignal(str)
+    
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         """Initialize terminal display."""
         super().__init__(parent)
         self.setReadOnly(True)
         self.prompt = "$ "
+        
+        # Initialize command history
+        self.command_history: List[str] = []
+        self.history_index = 0
+        self.current_command = ""
+        
+        # Set up appearance
+        self.setStyleSheet("""
+            QTextEdit {
+                background-color: #1E1E1E;
+                color: #FFFFFF;
+                font-family: "Consolas", monospace;
+                font-size: 10pt;
+                border: none;
+            }
+        """)
+        
+        # Show initial prompt
         self.show_prompt()
 
     def append_output(self, text: str, error: bool = False) -> None:

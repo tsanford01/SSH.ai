@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QFormLayout,
 )
 from PyQt6.QtCore import Qt
+import logging
+import socket
 
 from ..core.ssh_connection import SSHCredentials
 
@@ -25,6 +27,8 @@ class ConnectionDialog(QDialog):
     def __init__(self, parent=None) -> None:
         """Initialize the connection dialog."""
         super().__init__(parent)
+        
+        logging.info("Initializing ConnectionDialog...")
         
         self.setWindowTitle("New SSH Connection")
         self.setModal(True)
@@ -71,6 +75,19 @@ class ConnectionDialog(QDialog):
         
         form_layout.addRow("SSH Key:", key_file_layout)
         
+        # Error labels
+        self.hostname_error = QLabel()
+        self.hostname_error.setStyleSheet("color: red;")
+        form_layout.addRow("", self.hostname_error)
+
+        self.port_error = QLabel()
+        self.port_error.setStyleSheet("color: red;")
+        form_layout.addRow("", self.port_error)
+
+        self.username_error = QLabel()
+        self.username_error.setStyleSheet("color: red;")
+        form_layout.addRow("", self.username_error)
+        
         # Add form to main layout
         layout.addLayout(form_layout)
         
@@ -82,9 +99,12 @@ class ConnectionDialog(QDialog):
         self.buttonBox.accepted.connect(self._handle_accept)
         self.buttonBox.rejected.connect(self.reject)
         layout.addWidget(self.buttonBox)
+        
+        logging.info("ConnectionDialog initialized.")
     
     def _browse_key_file(self) -> None:
         """Open file dialog to select SSH key file."""
+        logging.info("Browsing for SSH key file...")
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "Select SSH Key File",
@@ -94,6 +114,7 @@ class ConnectionDialog(QDialog):
         
         if file_name:
             self.key_file_edit.setText(file_name)
+            logging.info(f"Selected SSH key file: {file_name}")
     
     def _validate_input(self) -> bool:
         """
@@ -104,11 +125,11 @@ class ConnectionDialog(QDialog):
         """
         # Check required fields
         if not self.hostname_edit.text():
-            self._show_error("Hostname is required")
+            self.hostname_error.setText("Hostname cannot be empty.")
             return False
         
         if not self.username_edit.text():
-            self._show_error("Username is required")
+            self.username_error.setText("Username cannot be empty.")
             return False
         
         # Validate port
@@ -117,7 +138,7 @@ class ConnectionDialog(QDialog):
             if port < 1 or port > 65535:
                 raise ValueError()
         except ValueError:
-            self._show_error("Port must be a number between 1 and 65535")
+            self.port_error.setText("Port must be a number between 1 and 65535")
             return False
         
         # Check authentication method
@@ -134,9 +155,36 @@ class ConnectionDialog(QDialog):
         QMessageBox.critical(self, "Input Error", message)
     
     def _handle_accept(self) -> None:
-        """Handle dialog acceptance."""
-        if self._validate_input():
-            self.accept()
+        """Handle dialog acceptance with validation."""
+        # Clear previous error messages
+        self.hostname_error.clear()
+        self.port_error.clear()
+        self.username_error.clear()
+
+        # Validate inputs
+        if not self.hostname_edit.text():
+            self.hostname_error.setText("Hostname cannot be empty.")
+            return
+        if not self.username_edit.text():
+            self.username_error.setText("Username cannot be empty.")
+            return
+        try:
+            port = int(self.port_edit.text())
+            if port <= 0 or port > 65535:
+                raise ValueError("Port must be between 1 and 65535.")
+        except ValueError as ve:
+            self.port_error.setText(str(ve))
+            return
+
+        # Attempt to resolve hostname to check for errors
+        try:
+            socket.gethostbyname(self.hostname_edit.text())
+        except socket.gaierror as ge:
+            self.hostname_error.setText(f"Failed to resolve hostname: {ge}")
+            return
+
+        # If all validations pass, accept the dialog
+        self.accept()
     
     def get_credentials(self) -> SSHCredentials:
         """

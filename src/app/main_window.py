@@ -16,6 +16,9 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtGui import QFont
+import asyncio
+import logging
 
 from .ui.connection_sidebar import ConnectionSidebar
 from .ui.terminal_tabs import TerminalTabs
@@ -31,52 +34,77 @@ class MainWindow(QMainWindow):
         """Initialize main window."""
         super().__init__()
         
+        logging.info("Initializing MainWindow...")
+        
         # Initialize managers
         self.llm = LLMManager()
-        self.session_manager = SessionManager()
+        logging.info("LLMManager initialized.")
+        self.session_manager = SessionManager(self.llm)
+        logging.info("SessionManager initialized.")
         
         # Set up UI
         self.setWindowTitle("SSH.ai")
         self.resize(1200, 800)
+        logging.info("UI setup complete.")
+        
+        # Create central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        logging.info("Central widget set.")
         
         # Create main layout
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        logging.info("Main layout created.")
         
-        # Create horizontal layout for main content
-        content_layout = QHBoxLayout()
+        # Create horizontal splitter for main content
+        content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        logging.info("Content splitter created.")
         
         # Create connection sidebar
-        self.connection_sidebar = ConnectionSidebar()
-        content_layout.addWidget(self.connection_sidebar)
+        self.connection_sidebar = ConnectionSidebar(self.session_manager)
+        content_splitter.addWidget(self.connection_sidebar)
+        logging.info("ConnectionSidebar added.")
         
         # Create terminal tabs
         self.terminal_tabs = TerminalTabs()
-        content_layout.addWidget(self.terminal_tabs)
+        content_splitter.addWidget(self.terminal_tabs)
+        logging.info("TerminalTabs added.")
         
         # Create suggestion panel
         self.suggestion_panel = SuggestionPanel(self.llm, self)
-        content_layout.addWidget(self.suggestion_panel)
+        content_splitter.addWidget(self.suggestion_panel)
+        logging.info("SuggestionPanel added.")
         
-        # Add content layout to main layout
-        layout.addLayout(content_layout)
+        # Set initial sizes for splitter
+        content_splitter.setSizes([250, 700, 250])  # Sidebar, Terminal, Suggestions
+        logging.info("Splitter sizes set.")
+        
+        # Add splitter to main layout
+        main_layout.addWidget(content_splitter)
+        logging.info("Content splitter added to main layout.")
         
         # Create status bar
         self.status_bar = QStatusBar()
-        layout.addWidget(self.status_bar)
-        
-        # Set central widget
-        central_widget = QWidget()
-        central_widget.setLayout(layout)
-        self.setCentralWidget(central_widget)
+        self.setStatusBar(self.status_bar)
+        logging.info("Status bar created.")
         
         # Create menu bar
         self._create_menus()
+        logging.info("Menu bar created.")
         
         # Connect signals
         self._connect_signals()
+        logging.info("UI signals connected.")
+        
+        self.raise_()
+        self.activateWindow()
+        logging.info("MainWindow initialized successfully.")
     
     def _create_menus(self) -> None:
         """Create menu bar and menus."""
+        logging.info("Creating menu bar...")
         menubar = self.menuBar()
         
         # File menu
@@ -117,15 +145,22 @@ class MainWindow(QMainWindow):
         
         about = help_menu.addAction("&About")
         about.triggered.connect(self._show_about)
+        
+        logging.info("Menu bar created.")
     
     def _connect_signals(self) -> None:
         """Connect UI signals to slots."""
+        logging.info("Connecting UI signals...")
         # Connect terminal signals to suggestion panel
         self.terminal_tabs.command_executed.connect(
-            self.suggestion_panel.analyze_command
+            lambda cmd, output: asyncio.create_task(
+                self.suggestion_panel.analyze_command(cmd, output)
+            )
         )
         self.terminal_tabs.error_occurred.connect(
-            self.suggestion_panel.analyze_error
+            lambda error: asyncio.create_task(
+                self.suggestion_panel.analyze_error(error)
+            )
         )
         
         # Connect suggestion panel signals to terminal
@@ -140,6 +175,8 @@ class MainWindow(QMainWindow):
         self.connection_sidebar.session_closed.connect(
             self.terminal_tabs.close_session
         )
+        
+        logging.info("UI signals connected.")
     
     @pyqtSlot()
     def _new_connection(self) -> None:

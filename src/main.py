@@ -14,23 +14,26 @@ from app.core.llm_manager import LLMManager
 from app.main_window import MainWindow
 from app.utils.logger import setup_logger
 
-def main() -> None:
+async def main() -> None:
     """Initialize and run the main application."""
     # Setup logging
     setup_logger()
     
     # Create Qt application
     app = QApplication(sys.argv)
-    app.setStyle('Fusion')  # Use Fusion style for consistent cross-platform look
     
-    # Create and show main window
-    window = MainWindow()
-    window.show()
+    # Initialize and show the main window
+    main_window = MainWindow()
+    main_window.show()
     
-    # Start the event loop
+    # Start the LLM server in the background
+    asyncio.create_task(start_llm_server())
+    
+    # Execute the application
     sys.exit(app.exec())
 
-async def main():
+async def start_llm_server() -> None:
+    """Start the LLM server and test the connection."""
     # Initialize LLM Manager
     llm = LLMManager()
     
@@ -43,14 +46,12 @@ async def main():
         print("Waiting for server to initialize...")
         await asyncio.sleep(15)  # Increased wait time
         
-        # Test connection before sending query
+        # Test connection before proceeding
         max_retries = 3
         for attempt in range(max_retries):
             print(f"\nTesting connection (attempt {attempt + 1})...")
             if await llm.test_connection():
-                print("\nConnection successful! Testing LLM with a sample query...")
-                response = await llm.get_command_suggestion("I want to list all files in the current directory")
-                print(f"\nLLM Response: {response}")
+                print("\nConnection successful!")
                 break
             else:
                 if attempt < max_retries - 1:
@@ -58,11 +59,6 @@ async def main():
                     await asyncio.sleep(5)
                 else:
                     print("Failed to connect to LLM server after multiple attempts")
-        
-        # Cleanup
-        llm.stop_server()
-    else:
-        print("Failed to start LLM server!")
 
 if __name__ == "__main__":
     asyncio.run(main()) 

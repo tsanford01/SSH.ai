@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCursor, QColor
 from PyQt6.QtWidgets import QApplication
-from app.models.llm_manager import LLMManager
+from ..core.llm_manager import LLMManager
 
 class SuggestionPanel(QWidget):
     """Panel for displaying LLM suggestions."""
@@ -43,6 +43,48 @@ class SuggestionPanel(QWidget):
         
         # Track current suggestions
         self._current_suggestions: List[Dict[str, str]] = []
+    
+    async def analyze_command(self, command: str, output: str) -> None:
+        """
+        Analyze a command and its output to generate suggestions.
+        
+        Args:
+            command: The command that was executed
+            output: The command's output
+        """
+        try:
+            # Get suggestions from LLM
+            suggestions = await self.llm.get_intelligent_suggestions(
+                partial_command=command,
+                working_dir=None  # TODO: Get working directory
+            )
+            
+            # Update UI with suggestions
+            self.set_suggestions(suggestions)
+        except Exception as e:
+            print(f"Error analyzing command: {e}")
+            self.clear()
+    
+    async def analyze_error(self, error: str) -> None:
+        """
+        Analyze an error message to generate helpful suggestions.
+        
+        Args:
+            error: The error message to analyze
+        """
+        try:
+            # Get suggestions from LLM
+            suggestions = await self.llm.get_intelligent_suggestions(
+                partial_command=None,
+                working_dir=None,  # TODO: Get working directory
+                environment={"error": error}
+            )
+            
+            # Update UI with suggestions
+            self.set_suggestions(suggestions)
+        except Exception as e:
+            print(f"Error analyzing error: {e}")
+            self.clear()
     
     def _init_ui(self) -> None:
         """Initialize the UI components."""

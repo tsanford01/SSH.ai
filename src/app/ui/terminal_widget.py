@@ -3,14 +3,14 @@ Terminal emulator widget for SSH sessions.
 """
 
 from typing import Optional, Callable
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QProcess
 from PyQt6.QtGui import QFont, QPalette, QColor, QTextCursor, QKeyEvent
 
 from ..core.ssh_connection import SSHConnection, SSHCredentials
 
 class TerminalWidget(QWidget):
-    """Terminal emulator widget for SSH sessions."""
+    """Terminal widget for SSH connections."""
     
     # Signals
     command_executed = pyqtSignal(str, str)  # command, output
@@ -31,17 +31,16 @@ class TerminalWidget(QWidget):
         super().__init__(parent)
         
         self.credentials = credentials
-        self.ssh = SSHConnection()
+        self.ssh = SSHConnection(credentials)
         
-        # Create layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        
-        # Create terminal display
+        # Set up UI
+        layout = QVBoxLayout()
         self.display = TerminalDisplay()
-        self.display.command_entered.connect(self._handle_command)
         layout.addWidget(self.display)
+        self.setLayout(layout)
+
+        # Connect signals
+        self.display.command_entered.connect(self._handle_command)
         
         # Connect to SSH server
         try:
@@ -82,55 +81,35 @@ class TerminalWidget(QWidget):
             self.ssh.close()
             self.connection_closed.emit()
 
-class TerminalDisplay(QWidget):
-    """Custom terminal display widget."""
-    
-    # Signals
-    command_entered = pyqtSignal(str)
-    
+class TerminalDisplay(QTextEdit):
+    """Terminal display widget."""
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         """Initialize terminal display."""
         super().__init__(parent)
-        
-        # Set up display properties
-        self.setFont(QFont("Consolas", 10))
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        
-        # Set up colors
-        palette = self.palette()
-        palette.setColor(QPalette.ColorRole.Base, QColor("#1E1E1E"))
-        palette.setColor(QPalette.ColorRole.Text, QColor("#FFFFFF"))
-        self.setPalette(palette)
-        
-        # Initialize state
-        self.command_history: list[str] = []
-        self.history_index = 0
-        self.current_command = ""
+        self.setReadOnly(True)
         self.prompt = "$ "
-        
-        # Show initial prompt
         self.show_prompt()
-    
-    def show_prompt(self) -> None:
-        """Display command prompt."""
-        self.append_output(self.prompt)
-    
+
     def append_output(self, text: str, error: bool = False) -> None:
         """
         Append text to terminal display.
-        
+
         Args:
             text: Text to append
             error: Whether this is error output
         """
         color = "#FF6B68" if error else "#FFFFFF"
-        self.insertHtml(f'<span style="color: {color}">{text}</span>')
-        
-        # Scroll to bottom
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(f'<span style="color: {color}">{text}</span>')
         self.setTextCursor(cursor)
-    
+        self.ensureCursorVisible()
+
+    def show_prompt(self) -> None:
+        """Show command prompt."""
+        self.append_output(self.prompt)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle key press events."""
         if event.key() == Qt.Key.Key_Return:

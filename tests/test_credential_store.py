@@ -45,7 +45,7 @@ def test_save_credentials(store):
     assert saved_creds.username == "testuser"
     assert saved_creds.hostname == "test.host"
     assert saved_creds.port == 22
-    assert saved_creds.get_password() == "testpass"
+    assert store.verify_password(saved_creds.get_password(), "testpass")
 
 def test_save_credentials_with_key(store):
     """Test saving credentials with SSH key."""
@@ -119,7 +119,7 @@ def test_update_credentials(store):
     saved_creds = store.get_credentials("Test Server")
     assert saved_creds.username == "newuser"
     assert saved_creds.hostname == "new.host"
-    assert saved_creds.get_password() == "newpass"
+    assert store.verify_password(saved_creds.get_password(), "newpass")
 
 def test_invalid_profile(store):
     """Test getting non-existent profile."""

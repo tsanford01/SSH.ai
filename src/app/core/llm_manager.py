@@ -17,6 +17,8 @@ import json
 import threading
 
 from .prompt_templates import PromptTemplate, PromptType, Context
+from .command_parser import CommandParser, ParsedCommand
+from .command_history import CommandHistory, CommandPattern
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,7 @@ class LLMManager:
         self.logger = logging.getLogger(__name__)
         self.server_ready = False
         self._process = psutil.Process(os.getpid())
-        self._command_history: List[str] = []
+        self._command_history = CommandHistory()
         self._system_info: Dict[str, Any] = {
             "os": os.name,
             "platform": sys.platform,
@@ -53,6 +55,7 @@ class LLMManager:
         }
         self._connection_state: Dict[str, Any] = {}
         self.config = LLMConfig()
+        self._command_parser = CommandParser()
         
         # Check GPU support and optimize settings
         self.gpu_info = self._check_gpu_support()
@@ -62,6 +65,14 @@ class LLMManager:
         # Set optimal thread count if not specified
         if self.config.threads is None:
             self.config.threads = max(1, (os.cpu_count() or 2) - 1)  # Leave one core free
+        
+        # Check GPU support on initialization
+        self.gpu_available = self._check_gpu_support()
+        if self.config.use_gpu and not self.gpu_available:
+            self.logger.warning(
+                "GPU acceleration requested but no GPU support detected. "
+                "Falling back to CPU-only mode."
+            )
     
     def _check_gpu_support(self) -> Dict[str, Any]:
         """
@@ -346,6 +357,86 @@ class LLMManager:
             print(f"Connection test error: {e}")
             return False
 
+    async def get_intelligent_suggestions(
+        self,
+        partial_command: Optional[str] = None,
+        working_dir: Optional[str] = None,
+        environment: Optional[Dict[str, str]] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Get intelligent command suggestions based on history and context.
+        
+        Args:
+            partial_command: Partial command to get suggestions for
+            working_dir: Current working directory
+            environment: Current environment variables
+            
+        Returns:
+            List of suggestions, each containing:
+                command: The suggested command
+                description: Why this command is suggested
+                confidence: Confidence score (0-1)
+        """
+        suggestions = []
+        
+        # Get history-based suggestions
+        if partial_command:
+            history_suggestions = self._command_history.get_command_suggestions(partial_command)
+            for cmd in history_suggestions:
+                pattern = self._command_history.get_command_patterns(cmd)
+                if pattern:
+                    suggestions.append({
+                        "command": cmd,
+                        "description": f"Used {pattern.frequency} times with {pattern.success_rate:.0%} success rate",
+                        "confidence": min(0.9, (pattern.success_rate * pattern.frequency / 10))
+                    })
+        
+        # Get context-based suggestions
+        recent_commands = list(self._command_history._history.keys())[-5:]
+        if recent_commands:
+            analysis = self._command_history.analyze_command_sequence(recent_commands)
+            for suggestion in analysis['suggestions']:
+                if suggestion not in [s['command'] for s in suggestions]:
+                    pattern = self._command_history.get_command_patterns(suggestion)
+                    if pattern:
+                        suggestions.append({
+                            "command": suggestion,
+                            "description": f"Frequently follows your recent commands",
+                            "confidence": 0.7
+                        })
+        
+        # Get LLM-based suggestions if server is ready
+        if self.server_ready and (partial_command or working_dir):
+            context = f"Current directory: {working_dir or 'unknown'}\n"
+            if recent_commands:
+                context += f"Recent commands: {', '.join(recent_commands)}\n"
+            if partial_command:
+                context += f"Partial command: {partial_command}"
+            
+            try:
+                llm_suggestion = await self.get_command_suggestion(context)
+                if llm_suggestion and not llm_suggestion.startswith("Error"):
+                    suggestions.append({
+                        "command": llm_suggestion,
+                        "description": "AI suggested based on your context",
+                        "confidence": 0.8
+                    })
+            except Exception as e:
+                self.logger.warning(f"Failed to get LLM suggestion: {e}")
+        
+        # Sort by confidence
+        suggestions.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        # Remove duplicates, keeping highest confidence
+        seen = set()
+        unique_suggestions = []
+        for s in suggestions:
+            if s['command'] not in seen:
+                seen.add(s['command'])
+                unique_suggestions.append(s)
+        
+        return unique_suggestions[:5]  # Return top 5 suggestions
+
     async def get_command_suggestion(self, context: str) -> str:
         """Get command suggestions based on context."""
         if not self.server_ready:
@@ -365,8 +456,10 @@ A: pwd
 Q: What command to create a new directory?
 A: mkdir newfolder
 
-Q: What command to {context}?
-A:"""
+Context:
+{context}
+
+Suggest a relevant command:"""
             
             response = requests.post(
                 f"{self.base_url}/completion",
@@ -376,7 +469,7 @@ A:"""
                     "temperature": 0.1,
                     "top_k": 5,
                     "top_p": 0.9,
-                    "stop": ["\n", "Q:", "A:", "</s>", "OUT:", "{"],  # Added { to prevent JSON output
+                    "stop": ["\n", "Q:", "A:", "</s>", "OUT:", "{"],
                     "repeat_penalty": 1.1,
                     "presence_penalty": 0.1,
                     "frequency_penalty": 0.1,
@@ -402,11 +495,10 @@ A:"""
                 
                 return "Error: Invalid command generated"
             else:
-                return f"Error: Server returned status {response.status_code}"
+                return f"Error: Server returned {response.status_code}"
             
         except Exception as e:
-            print(f"Error in get_command_suggestion: {str(e)}")
-            return "Error: Failed to get command suggestion"
+            return f"Error: {str(e)}"
 
     def stop_server(self) -> None:
         """Stop the llamafile server."""
@@ -421,25 +513,186 @@ A:"""
         """Cleanup on deletion."""
         self.stop_server()
 
-    def analyze_command(self, command: str) -> str:
+    def analyze_command(
+        self,
+        command: str,
+        working_dir: Optional[str] = None,
+        environment: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
         """
-        Analyze an SSH command.
+        Analyze command with context awareness.
         
         Args:
-            command: SSH command to analyze
+            command: Command to analyze
+            working_dir: Current working directory
+            environment: Current environment variables
             
         Returns:
-            Analysis and recommendations
+            Analysis results including suggestions and risks
+            
+        Raises:
+            RuntimeError: If analysis fails
         """
-        context = Context(
-            command_history=self._command_history,
-            current_command=command,
-            system_info=self._system_info,
-            connection_state=self._connection_state
-        )
+        try:
+            # Parse command
+            parsed = self._command_parser.parse_command(
+                command,
+                working_dir=working_dir,
+                environment=environment
+            )
+            
+            # Get command type and context requirements
+            cmd_type = self._command_parser.get_command_type(parsed)
+            context = self._command_parser.get_context_requirements(parsed)
+            
+            # Analyze risks
+            risks = self._command_parser.analyze_risk(parsed)
+            
+            # Get command patterns from history
+            patterns = self._command_history.get_command_patterns(command)
+            
+            # Build analysis context
+            analysis_context = self._build_analysis_context(
+                parsed,
+                context,
+                patterns
+            )
+            
+            # Generate LLM prompt
+            prompt = self._build_command_prompt(
+                parsed,
+                cmd_type,
+                risks,
+                analysis_context,
+                patterns
+            )
+            
+            # Get LLM response
+            response = self._generate_response(prompt)
+            
+            return {
+                'command': parsed,
+                'type': cmd_type,
+                'risks': risks,
+                'suggestions': response,
+                'context': analysis_context,
+                'patterns': patterns
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Command analysis failed: {e}")
+            raise RuntimeError(f"Failed to analyze command: {e}") from e
+    
+    def _build_analysis_context(
+        self,
+        command: ParsedCommand,
+        context_requirements: Dict[str, bool],
+        patterns: Optional[CommandPattern] = None
+    ) -> Dict[str, Any]:
+        """
+        Build context information for command analysis.
         
-        prompt = PromptTemplate.generate(PromptType.COMMAND_EXPLANATION, context)
-        return self._generate_response(prompt)
+        Args:
+            command: Parsed command
+            context_requirements: Required context flags
+            patterns: Command patterns from history
+            
+        Returns:
+            Context information dictionary
+        """
+        context = {}
+        
+        # Add working directory context if required
+        if context_requirements['working_dir']:
+            context['working_dir'] = command.working_dir or self._connection_state.get('cwd')
+        
+        # Add environment variables if required
+        if context_requirements['env_vars']:
+            context['environment'] = {
+                **self._connection_state.get('env', {}),
+                **(command.environment or {})
+            }
+        
+        # Add command history context
+        context['recent_commands'] = self._command_history[-5:] if self._command_history else []
+        
+        # Add connection state
+        context['connection'] = {
+            'hostname': self._connection_state.get('hostname'),
+            'username': self._connection_state.get('username'),
+            'connected': self._connection_state.get('connected', False)
+        }
+        
+        # Add pattern information if available
+        if patterns:
+            context['patterns'] = {
+                'frequency': patterns.frequency,
+                'success_rate': patterns.success_rate,
+                'avg_duration': patterns.avg_duration,
+                'common_args': patterns.common_args,
+                'common_flags': patterns.common_flags,
+                'related_commands': patterns.related_commands
+            }
+        
+        return context
+    
+    def _build_command_prompt(
+        self,
+        command: ParsedCommand,
+        cmd_type: str,
+        risks: Dict[str, Any],
+        context: Dict[str, Any],
+        patterns: Optional[CommandPattern] = None
+    ) -> str:
+        """
+        Build prompt for LLM analysis.
+        
+        Args:
+            command: Parsed command
+            cmd_type: Command type
+            risks: Risk analysis results
+            context: Command context
+            patterns: Command patterns from history
+            
+        Returns:
+            Formatted prompt string
+        """
+        prompt_parts = [
+            f"Analyze the following command: {command.raw_command}\n",
+            f"Command type: {cmd_type}\n",
+            "\nContext:",
+            f"- Working directory: {context.get('working_dir', 'unknown')}",
+            f"- Recent commands: {', '.join(context.get('recent_commands', []))}"
+        ]
+        
+        # Add risk information
+        if risks['level'] != 'low':
+            prompt_parts.extend([
+                "\nRisk Analysis:",
+                f"- Risk level: {risks['level']}",
+                f"- Risk factors: {', '.join(risks['factors'])}"
+            ])
+        
+        # Add pattern information if available
+        if patterns:
+            prompt_parts.extend([
+                "\nCommand History Analysis:",
+                f"- Usage frequency: {patterns.frequency} times",
+                f"- Success rate: {patterns.success_rate:.1%}",
+                f"- Average duration: {patterns.avg_duration:.2f}s",
+                f"- Common arguments: {', '.join(patterns.common_args)}",
+                f"- Related commands: {', '.join(patterns.related_commands)}"
+            ])
+        
+        # Add specific prompts based on command type
+        if cmd_type == 'file_operation':
+            prompt_parts.append("\nAnalyze file operation safety and efficiency")
+        elif cmd_type == 'system_operation':
+            prompt_parts.append("\nCheck system impact and resource usage")
+        elif cmd_type == 'network_operation':
+            prompt_parts.append("\nVerify network security and performance")
+        
+        return "\n".join(prompt_parts)
     
     def analyze_error(self, error: str, command: Optional[str] = None) -> str:
         """
@@ -535,7 +788,7 @@ A:"""
         Args:
             command: Command to add to history
         """
-        self._command_history.append(command)
+        self._command_history.add_command(command)
         # Keep only last 100 commands
         if len(self._command_history) > 100:
             self._command_history = self._command_history[-100:]
@@ -596,4 +849,30 @@ A:"""
             )
             return False
         
-        return True 
+        return True
+
+    def record_command_execution(
+        self,
+        command: str,
+        exit_code: int,
+        duration: float,
+        working_dir: Optional[str] = None,
+        environment: Optional[Dict[str, str]] = None
+    ) -> None:
+        """
+        Record command execution in history.
+        
+        Args:
+            command: Executed command
+            exit_code: Command exit code
+            duration: Execution duration in seconds
+            working_dir: Working directory
+            environment: Environment variables
+        """
+        self._command_history.add_command(
+            command,
+            exit_code,
+            duration,
+            working_dir,
+            environment
+        ) 

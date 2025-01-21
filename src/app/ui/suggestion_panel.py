@@ -2,7 +2,7 @@
 Suggestion panel for displaying LLM responses and recommendations.
 """
 
-from typing import Optional, Callable
+from typing import Optional, List, Dict
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -12,26 +12,37 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QScrollArea,
     QFrame,
-    QSizePolicy
+    QSizePolicy,
+    QListWidget,
+    QListWidgetItem
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtGui import QFont, QTextCursor, QColor
+from PyQt6.QtWidgets import QApplication
+from app.models.llm_manager import LLMManager
 
 class SuggestionPanel(QWidget):
-    """Panel for displaying LLM suggestions and analysis."""
+    """Panel for displaying LLM suggestions."""
     
     # Signal emitted when a suggested command should be executed
     execute_command = pyqtSignal(str)
     
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        """Initialize suggestion panel."""
+    def __init__(self, llm_manager: LLMManager, parent: Optional[QWidget] = None) -> None:
+        """
+        Initialize suggestion panel.
+
+        Args:
+            llm_manager: LLM manager instance
+            parent: Parent widget
+        """
         super().__init__(parent)
+        self.llm = llm_manager
         
         # Set up the UI
         self._init_ui()
         
-        # Track current suggestion
-        self._current_suggestion: Optional[str] = None
+        # Track current suggestions
+        self._current_suggestions: List[Dict[str, str]] = []
     
     def _init_ui(self) -> None:
         """Initialize the UI components."""
@@ -43,41 +54,48 @@ class SuggestionPanel(QWidget):
         header.setObjectName("suggestionHeader")
         header_layout = QHBoxLayout(header)
         
-        title = QLabel("AI Assistant")
+        title = QLabel("Command Suggestions")
         title.setObjectName("suggestionTitle")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         
         refresh_btn = QPushButton("🔄")
         refresh_btn.setObjectName("refreshButton")
-        refresh_btn.setToolTip("Refresh analysis")
-        refresh_btn.clicked.connect(self._refresh_analysis)
+        refresh_btn.setToolTip("Refresh suggestions")
+        refresh_btn.clicked.connect(self._refresh_suggestions)
         
         header_layout.addWidget(title)
         header_layout.addStretch()
         header_layout.addWidget(refresh_btn)
         
-        # Content area
-        content_area = QScrollArea()
-        content_area.setWidgetResizable(True)
-        content_area.setFrameShape(QFrame.Shape.NoFrame)
-        
-        self._content = QTextEdit()
-        self._content.setReadOnly(True)
-        self._content.setObjectName("suggestionContent")
-        self._content.setFont(QFont("Segoe UI", 10))
-        self._content.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding
-        )
-        
-        content_area.setWidget(self._content)
+        # Suggestions list
+        self._suggestions_list = QListWidget()
+        self._suggestions_list.setObjectName("suggestionsList")
+        self._suggestions_list.setFont(QFont("Segoe UI", 10))
+        self._suggestions_list.itemClicked.connect(self._suggestion_selected)
+        self._suggestions_list.setStyleSheet("""
+            QListWidget {
+                background-color: white;
+                border: none;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #eee;
+            }
+            QListWidget::item:selected {
+                background-color: #e5f3ff;
+                color: black;
+            }
+            QListWidget::item:hover {
+                background-color: #f5f5f5;
+            }
+        """)
         
         # Action buttons
         actions = QWidget()
         actions.setObjectName("suggestionActions")
         actions_layout = QHBoxLayout(actions)
         
-        self._execute_btn = QPushButton("Execute Suggestion")
+        self._execute_btn = QPushButton("Execute")
         self._execute_btn.setObjectName("executeButton")
         self._execute_btn.clicked.connect(self._execute_suggestion)
         self._execute_btn.setEnabled(False)
@@ -85,13 +103,15 @@ class SuggestionPanel(QWidget):
         copy_btn = QPushButton("Copy")
         copy_btn.setObjectName("copyButton")
         copy_btn.clicked.connect(self._copy_suggestion)
+        copy_btn.setEnabled(False)
+        self._copy_btn = copy_btn
         
         actions_layout.addWidget(self._execute_btn)
         actions_layout.addWidget(copy_btn)
         
         # Add all components to main layout
         layout.addWidget(header)
-        layout.addWidget(content_area)
+        layout.addWidget(self._suggestions_list)
         layout.addWidget(actions)
         
         # Apply styles
@@ -116,11 +136,6 @@ class SuggestionPanel(QWidget):
             #refreshButton:hover {
                 background-color: #d0d0d0;
                 border-radius: 4px;
-            }
-            #suggestionContent {
-                background-color: white;
-                border: none;
-                padding: 12px;
             }
             #suggestionActions {
                 background-color: #e0e0e0;
@@ -148,47 +163,78 @@ class SuggestionPanel(QWidget):
             }
         """)
     
-    def set_suggestion(self, text: str, has_command: bool = False) -> None:
+    def set_suggestions(self, suggestions: List[Dict[str, str]]) -> None:
         """
-        Set the suggestion text.
+        Set the suggestions to display.
         
         Args:
-            text: Suggestion text to display
-            has_command: Whether the suggestion includes an executable command
+            suggestions: List of suggestions, each containing:
+                command: The suggested command
+                description: Why this command is suggested
+                confidence: Confidence score (0-1)
         """
-        self._current_suggestion = text
-        self._content.setText(text)
-        self._execute_btn.setEnabled(has_command)
+        self._current_suggestions = suggestions
+        self._suggestions_list.clear()
         
-        # Scroll to top
-        cursor = self._content.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        self._content.setTextCursor(cursor)
+        for suggestion in suggestions:
+            item = QListWidgetItem()
+            item.setText(
+                f"{suggestion['command']}\n"
+                f"{suggestion['description']}"
+            )
+            
+            # Set background color based on confidence
+            confidence = float(suggestion['confidence'])
+            if confidence >= 0.8:
+                item.setBackground(QColor("#e3f2fd"))  # Light blue
+            elif confidence >= 0.6:
+                item.setBackground(QColor("#f1f8e9"))  # Light green
+            else:
+                item.setBackground(QColor("#fff3e0"))  # Light orange
+            
+            self._suggestions_list.addItem(item)
+        
+        # Enable/disable buttons
+        has_suggestions = len(suggestions) > 0
+        self._execute_btn.setEnabled(has_suggestions)
+        self._copy_btn.setEnabled(has_suggestions)
+        
+        if has_suggestions:
+            self._suggestions_list.setCurrentRow(0)
     
     def clear(self) -> None:
-        """Clear the current suggestion."""
-        self._current_suggestion = None
-        self._content.clear()
+        """Clear the current suggestions."""
+        self._current_suggestions = []
+        self._suggestions_list.clear()
         self._execute_btn.setEnabled(False)
+        self._copy_btn.setEnabled(False)
     
-    def _refresh_analysis(self) -> None:
-        """Request a refresh of the current analysis."""
+    def _suggestion_selected(self, item: QListWidgetItem) -> None:
+        """Handle suggestion selection."""
+        index = self._suggestions_list.row(item)
+        if 0 <= index < len(self._current_suggestions):
+            suggestion = self._current_suggestions[index]
+            self._execute_btn.setEnabled(True)
+            self._copy_btn.setEnabled(True)
+    
+    def _refresh_suggestions(self) -> None:
+        """Request a refresh of the current suggestions."""
         # This will be connected to the LLM manager
         pass
     
     def _execute_suggestion(self) -> None:
-        """Execute the suggested command."""
-        if self._current_suggestion:
-            # Extract command from suggestion
-            # For now, just emit the whole suggestion
-            self.execute_command.emit(self._current_suggestion)
+        """Execute the selected command."""
+        current_row = self._suggestions_list.currentRow()
+        if 0 <= current_row < len(self._current_suggestions):
+            suggestion = self._current_suggestions[current_row]
+            self.execute_command.emit(suggestion['command'])
     
     def _copy_suggestion(self) -> None:
-        """Copy suggestion to clipboard."""
-        if self._current_suggestion:
-            self._content.selectAll()
-            self._content.copy()
-            # Deselect
-            cursor = self._content.textCursor()
-            cursor.clearSelection()
-            self._content.setTextCursor(cursor) 
+        """Copy selected suggestion to clipboard."""
+        current_row = self._suggestions_list.currentRow()
+        if 0 <= current_row < len(self._current_suggestions):
+            suggestion = self._current_suggestions[current_row]
+            self._suggestions_list.setFocus()
+            self._suggestions_list.currentItem().setSelected(True)
+            clipboard = QApplication.clipboard()
+            clipboard.setText(suggestion['command']) 

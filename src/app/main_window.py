@@ -27,58 +27,47 @@ from .ui.settings_dialog import SettingsDialog
 class MainWindow(QMainWindow):
     """Main application window."""
     
-    def __init__(self, session_dir: Optional[Path] = None) -> None:
-        """
-        Initialize main window.
-        
-        Args:
-            session_dir: Directory for session storage
-        """
+    def __init__(self) -> None:
+        """Initialize main window."""
         super().__init__()
         
         # Initialize managers
         self.llm = LLMManager()
-        self.session_manager = SessionManager(self.llm, session_dir)
+        self.session_manager = SessionManager()
         
-        self.setWindowTitle("SSH Copilot")
-        self.setMinimumSize(1200, 800)
+        # Set up UI
+        self.setWindowTitle("SSH.ai")
+        self.resize(1200, 800)
         
-        # Create central widget and layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # Create main layout
+        layout = QVBoxLayout()
         
-        layout = QHBoxLayout(central_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        # Create horizontal layout for main content
+        content_layout = QHBoxLayout()
         
-        # Create main splitter
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        layout.addWidget(self.main_splitter)
+        # Create connection sidebar
+        self.connection_sidebar = ConnectionSidebar()
+        content_layout.addWidget(self.connection_sidebar)
         
-        # Add connection sidebar
-        self.connection_sidebar = ConnectionSidebar(self.session_manager)
-        self.main_splitter.addWidget(self.connection_sidebar)
-        
-        # Create terminal and suggestion splitter
-        self.terminal_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.main_splitter.addWidget(self.terminal_splitter)
-        
-        # Add terminal tabs
+        # Create terminal tabs
         self.terminal_tabs = TerminalTabs()
-        self.terminal_splitter.addWidget(self.terminal_tabs)
+        content_layout.addWidget(self.terminal_tabs)
         
-        # Add suggestion panel
-        self.suggestion_panel = SuggestionPanel(self.llm)
-        self.terminal_splitter.addWidget(self.suggestion_panel)
+        # Create suggestion panel
+        self.suggestion_panel = SuggestionPanel(self.llm, self)
+        content_layout.addWidget(self.suggestion_panel)
         
-        # Set splitter sizes
-        self.main_splitter.setSizes([200, 1000])  # Sidebar width
-        self.terminal_splitter.setSizes([600, 200])  # Terminal/suggestion ratio
+        # Add content layout to main layout
+        layout.addLayout(content_layout)
         
         # Create status bar
         self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready")
+        layout.addWidget(self.status_bar)
+        
+        # Set central widget
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
         
         # Create menu bar
         self._create_menus()

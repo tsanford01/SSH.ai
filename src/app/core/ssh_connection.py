@@ -11,6 +11,7 @@ from Crypto.Random import get_random_bytes
 import paramiko
 import logging
 from pathlib import Path
+from paramiko import SSHClient, AutoAddPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -63,20 +64,19 @@ class SSHCredentials:
         return cipher.decrypt_and_verify(ciphertext, tag).decode()
 
 class SSHConnection:
-    """Manages SSH connection and operations."""
-    
+    """SSH connection manager."""
+
     def __init__(self, credentials: SSHCredentials) -> None:
         """
         Initialize SSH connection.
-        
+
         Args:
-            credentials: SSH credentials
+            credentials: SSH connection credentials
         """
         self.credentials = credentials
-        self.client = paramiko.SSHClient()
-        self.client.set_missing_host_key_policy(
-            paramiko.AutoAddPolicy()
-        )
+        self.client = SSHClient()
+        self.client.set_missing_host_key_policy(AutoAddPolicy())
+        self._connected = False
         
         # Connect using provided credentials
         connect_kwargs = {
@@ -99,6 +99,7 @@ class SSHConnection:
             logger.info(
                 f"Connected to {credentials.hostname} as {credentials.username}"
             )
+            self._connected = True
         except Exception as e:
             logger.error(
                 f"Failed to connect to {credentials.hostname}: {e}"

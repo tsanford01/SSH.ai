@@ -4,13 +4,14 @@ Tests for terminal tabs functionality.
 
 import pytest
 from unittest.mock import Mock, patch
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget, QLabel
 from PyQt6.QtCore import Qt
 from PyQt6.QtTest import QTest
 
 from src.app.ui.terminal_tabs import TerminalTabs
 from src.app.core.session_manager import Session
 from src.app.core.ssh_connection import SSHConnection, SSHCredentials
+from src.app.models.ssh_credentials import SSHCredentials as SSHCredentialsModel
 
 # Required for Qt widgets
 app = QApplication([])
@@ -25,8 +26,8 @@ def mock_session():
         hostname="test.host",
         port=22
     )
-    mock_conn.is_connected.return_value = True
-    return Mock(spec=Session, connection=mock_conn)
+    mock_conn.is_connected = Mock(return_value=True)
+    return Session(mock_conn)
 
 @pytest.fixture
 def tabs():

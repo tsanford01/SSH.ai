@@ -34,6 +34,8 @@ ENV/
 .project
 .pydevproject
 .settings/
+*.code-workspace
+.history/
 
 # Project-specific
 # Sensitive data and configurations
@@ -44,12 +46,21 @@ ENV/
 config/*
 !config/example.env
 !config/example_llm_config.json
+*.secret
+*.token
+.ssh/
+known_hosts
 
 # Logs and session data
 logs/
 *.log
 session_data/
 *.session
+performance_logs/
+test_results/
+crash_reports/
+debug_logs/
+profiling_data/
 
 # Local LLM models and data
 models/
@@ -57,6 +68,13 @@ models/
 *.bin
 *.pt
 *.pth
+*.llamafile
+*.exe
+model_cache/
+.llamafile/
+llm_data/
+embeddings/
+quantized_models/
 
 # Testing
 .coverage
@@ -66,18 +84,33 @@ htmlcov/
 coverage.xml
 *.cover
 .hypothesis/
+benchmark_results/
+test_reports/
+.pytest_reports/
+load_test_results/
 
 # Build and packaging
 *.manifest
 *.spec
 .Python
 *.pyc
+dist/
+build/
+installer/
+*.msi
+*.exe
+*.zip
+*.tar.gz
 
 # Operating System
 .DS_Store
 Thumbs.db
 *.db
 *.sqlite3
+*.sqlite
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
 
 # Temporary files
 *.bak
@@ -85,7 +118,95 @@ Thumbs.db
 *.temp
 .*.swp
 *~
+.temp/
+.cache/
+tmp/
+temp/
 
-# Documentation build
+# Documentation
 docs/_build/
-docs/api/ 
+docs/api/
+docs/generated/
+docs/_static/
+docs/_templates/
+site/
+*.pdf
+*.docx
+*.epub
+.mkdocs/
+sphinx_build/
+Build_Phases.md
+
+# Development tools
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+.dmypy.json
+.pyre_configuration
+
+# Performance and profiling
+*.prof
+*.stats
+*.perf
+profiling/
+.benchmarks/
+*.trace
+*.heap
+memory_dumps/
+
+# UI Development
+*.ui
+*.qrc
+*_rc.py
+*_ui.py
+ui_*.py
+*.qmlc
+*.jsc
+
+# SSH and Terminal
+*.pty
+*.sock
+*.fifo
+tty_logs/
+terminal_recordings/
+
+# Security
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+*.pfx
+*.keystore
+security_scans/
+audit_logs/
+
+# Backup files
+*.bak
+*.backup
+*~
+*.old
+*.orig
+*.rej
+*.sav
+backups/
+
+# Version control
+.git/
+.gitattributes
+.gitmodules
+*.patch
+*.diff
+.svn/
+CVS/
+
+# Editor specific
+*.sublime-project
+*.sublime-workspace
+*.komodoproject
+.komodotools/
+*.tmproj
+*.tmproject
+.vscode/
+*.kate-swp 

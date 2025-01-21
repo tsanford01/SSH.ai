@@ -9,6 +9,12 @@ from typing import Optional, Dict, Any, List
 from pathlib import Path
 from dataclasses import dataclass
 import sys
+import subprocess
+from openai import OpenAI
+import requests
+import time
+import json
+import threading
 
 from .prompt_templates import PromptTemplate, PromptType, Context
 
@@ -17,31 +23,404 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LLMConfig:
     """Configuration for LLM usage."""
-    max_memory_mb: int = 2048
-    max_cpu_percent: int = 50
-    context_length: int = 1024
-    temperature: float = 0.7
+    max_memory_mb: int = 4096  # Increased to match test configuration
+    max_cpu_percent: int = 50   # Keep moderate CPU usage
+    context_length: int = 4096  # Increased from 1024 for better performance
+    temperature: float = 0.7    # Keep default temperature
+    use_gpu: bool = True        # Keep GPU enabled
+    gpu_layers: int = 9999      # Full GPU layer offloading
+    batch_size: int = 512       # Keep optimal batch size
+    threads: Optional[int] = None  # Will be set to (cpu_count - 1) in __init__
 
 class LLMManager:
-    """Manages local LLM model loading and inference."""
+    """Manages local LLM interactions using llamafile."""
     
-    def __init__(self, config: Optional[LLMConfig] = None) -> None:
-        """
-        Initialize LLM manager.
-        
-        Args:
-            config: LLM configuration. If None, uses default config.
-        """
-        self.config = config or LLMConfig()
+    def __init__(self) -> None:
+        """Initialize the LLM manager."""
+        self.base_url = "http://127.0.0.1:8080"
+        self.client = None
+        self.llamafile_path = Path("models/llava-v1.5-7b-q4.exe") if os.name == 'nt' else Path("models/llava-v1.5-7b-q4.llamafile")
+        self.process = None
+        self.logger = logging.getLogger(__name__)
+        self.server_ready = False
         self._process = psutil.Process(os.getpid())
         self._command_history: List[str] = []
         self._system_info: Dict[str, Any] = {
             "os": os.name,
             "platform": sys.platform,
-            "python_version": sys.version
+            "python_version": sys.version,
+            "cpu_count": os.cpu_count() or 1
         }
         self._connection_state: Dict[str, Any] = {}
+        self.config = LLMConfig()
+        
+        # Check GPU support and optimize settings
+        self.gpu_info = self._check_gpu_support()
+        if self.gpu_info["available"]:
+            self.config.gpu_layers = self._optimize_gpu_layers(self.gpu_info)
+        
+        # Set optimal thread count if not specified
+        if self.config.threads is None:
+            self.config.threads = max(1, (os.cpu_count() or 2) - 1)  # Leave one core free
     
+    def _check_gpu_support(self) -> Dict[str, Any]:
+        """
+        Check if GPU acceleration is available and get GPU capabilities.
+        
+        Returns:
+            Dict with keys:
+                available (bool): True if GPU support is available
+                type (str): 'cuda' or 'rocm' or 'none'
+                memory_mb (int): Available GPU memory in MB
+                compute_capability (Optional[str]): CUDA compute capability if available
+        """
+        result = {
+            "available": False,
+            "type": "none",
+            "memory_mb": 0,
+            "compute_capability": None
+        }
+
+        # Check CUDA libraries
+        cuda_libs = [
+            "libcuda.so", "libcuda.so.1",  # Linux
+            "nvcuda.dll",                   # Windows
+            "libcuda.dylib"                 # MacOS
+        ]
+        
+        cuda_paths = [
+            os.environ.get("CUDA_PATH", ""),
+            "/usr/local/cuda",
+            "/opt/cuda",
+            "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA",
+            "/usr/lib64",
+            "/usr/lib",
+            "C:\\Windows\\System32"
+        ]
+
+        # Check for CUDA
+        for path in cuda_paths:
+            if not path:
+                continue
+            
+            # Check for NVCC compiler
+            nvcc_path = Path(path) / "bin" / ("nvcc.exe" if os.name == 'nt' else "nvcc")
+            if nvcc_path.exists():
+                # Try to get GPU info using nvidia-smi
+                try:
+                    nvidia_smi = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=memory.total,compute_cap", "--format=csv,noheader,nounits"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    if nvidia_smi.returncode == 0:
+                        memory, compute_cap = nvidia_smi.stdout.strip().split(",")
+                        result.update({
+                            "available": True,
+                            "type": "cuda",
+                            "memory_mb": int(float(memory.strip())),
+                            "compute_capability": compute_cap.strip()
+                        })
+                        self.logger.info(f"CUDA support detected: {result['memory_mb']}MB, Compute {result['compute_capability']}")
+                        return result
+                except (subprocess.SubprocessError, ValueError):
+                    pass
+
+            # Check for CUDA libraries
+            for lib in cuda_libs:
+                lib_path = Path(path) / lib
+                if lib_path.exists():
+                    result.update({
+                        "available": True,
+                        "type": "cuda",
+                        "memory_mb": 4096  # Default assumption if nvidia-smi fails
+                    })
+                    self.logger.info("CUDA libraries detected")
+                    return result
+
+        # Check for ROCm
+        rocm_libs = [
+            "librocm_smi64.so", "libhip_hcc.so",  # Linux
+            "rocm_smi64.dll",                      # Windows
+        ]
+        
+        rocm_paths = [
+            os.environ.get("HIP_PATH", ""),
+            "/opt/rocm",
+            "C:\\Program Files\\AMD\\ROCm",
+            "/usr/lib64",
+            "/usr/lib",
+            "C:\\Windows\\System32"
+        ]
+
+        for path in rocm_paths:
+            if not path:
+                continue
+            
+            # Check for ROCm compiler
+            compiler_path = Path(path) / "bin" / ("amdclang++.exe" if os.name == 'nt' else "amdclang++")
+            if compiler_path.exists():
+                # Try to get GPU info using rocm-smi
+                try:
+                    rocm_smi = subprocess.run(
+                        ["rocm-smi", "--showmeminfo", "vram"],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    if rocm_smi.returncode == 0:
+                        # Parse memory info from rocm-smi output
+                        memory_line = [line for line in rocm_smi.stdout.split('\n') if 'Total' in line]
+                        if memory_line:
+                            memory = int(memory_line[0].split()[-1])
+                            result.update({
+                                "available": True,
+                                "type": "rocm",
+                                "memory_mb": memory
+                            })
+                            self.logger.info(f"ROCm support detected: {memory}MB")
+                            return result
+                except (subprocess.SubprocessError, ValueError):
+                    pass
+
+            # Check for ROCm libraries
+            for lib in rocm_libs:
+                lib_path = Path(path) / lib
+                if lib_path.exists():
+                    result.update({
+                        "available": True,
+                        "type": "rocm",
+                        "memory_mb": 4096  # Default assumption if rocm-smi fails
+                    })
+                    self.logger.info("ROCm libraries detected")
+                    return result
+
+        self.logger.warning("No GPU support detected. Falling back to CPU-only mode")
+        return result
+
+    def _optimize_gpu_layers(self, gpu_info: Dict[str, Any]) -> int:
+        """
+        Optimize number of GPU layers based on available memory.
+        
+        Args:
+            gpu_info: GPU information from _check_gpu_support
+            
+        Returns:
+            int: Recommended number of layers to offload to GPU
+        """
+        if not gpu_info["available"]:
+            return 0
+            
+        # Model size approximation (7B parameters)
+        model_size_mb = 3800  # ~3.8GB for 7B model
+        
+        # Reserve 20% of GPU memory for overhead
+        available_memory = gpu_info["memory_mb"] * 0.8
+        
+        # Calculate maximum layers based on memory
+        max_layers = int((available_memory / model_size_mb) * 32)  # 32 is total layers
+        
+        # Ensure at least 1 layer if GPU is available
+        return max(1, min(max_layers, 9999))
+
+    def _monitor_output(self, pipe, prefix=''):
+        """Monitor subprocess output in a separate thread."""
+        for line in iter(pipe.readline, ''):
+            print(f"{prefix}{line.strip()}")
+            if "error" in line.lower():
+                print(f"Error detected: {line.strip()}")
+            if "listening" in line.lower():
+                print("Server is listening for connections")
+                self.server_ready = True
+
+    def start_server(self, no_browser: bool = False) -> bool:
+        """
+        Start the LLM server.
+        
+        Args:
+            no_browser: If True, prevents browser from opening automatically
+        
+        Returns:
+            bool: True if server started successfully
+        """
+        if not self.llamafile_path.exists():
+            self.logger.error(f"Model file not found: {self.llamafile_path}")
+            return False
+            
+        # Build command with optimizations
+        cmd = [
+            str(self.llamafile_path),
+            "-c", str(self.config.context_length),
+            "-t", str(self.config.threads),
+            "-b", str(self.config.batch_size),
+            "--port", "8080",
+            "--host", "127.0.0.1",
+            "--nobrowser"  # Always prevent browser from opening
+        ]
+        
+        # Add GPU settings only if GPU is available
+        if self.config.use_gpu and self.gpu_info["available"]:
+            cmd.extend(["-ngl", str(self.config.gpu_layers)])
+            if self.gpu_info["type"] == "cuda":
+                cmd.append("--cuda")
+            elif self.gpu_info["type"] == "rocm":
+                cmd.append("--rocm")
+        elif self.config.use_gpu:
+            self.logger.warning("GPU acceleration requested but no GPU support detected. Using CPU-only mode")
+        
+        try:
+            # Start server process
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+            
+            # Monitor output in separate threads
+            threading.Thread(
+                target=self._monitor_output,
+                args=(self.process.stdout, "OUT: "),
+                daemon=True
+            ).start()
+            
+            threading.Thread(
+                target=self._monitor_output,
+                args=(self.process.stderr, "ERR: "),
+                daemon=True
+            ).start()
+            
+            # Wait for server to be ready
+            start_time = time.time()
+            while not self.server_ready and time.time() - start_time < 30:
+                if self.process.poll() is not None:
+                    error_output = self.process.stderr.read() if self.process.stderr else "No error output available"
+                    self.logger.error(f"Server process terminated unexpectedly. Error: {error_output}")
+                    return False
+                time.sleep(0.1)
+            
+            if not self.server_ready:
+                self.logger.error("Server failed to start within timeout")
+                self.stop_server()
+                return False
+            
+            # Initialize OpenAI client
+            self.client = OpenAI(
+                base_url=f"{self.base_url}/v1",
+                api_key="not-needed"
+            )
+            
+            # Log final configuration
+            self.logger.info(f"Server started successfully with configuration:")
+            self.logger.info(f"  GPU: {self.gpu_info['type'].upper() if self.gpu_info['available'] else 'Disabled'}")
+            if self.gpu_info['available']:
+                self.logger.info(f"  GPU Memory: {self.gpu_info['memory_mb']}MB")
+                self.logger.info(f"  GPU Layers: {self.config.gpu_layers}")
+                if self.gpu_info['compute_capability']:
+                    self.logger.info(f"  Compute Capability: {self.gpu_info['compute_capability']}")
+            self.logger.info(f"  Threads: {self.config.threads}")
+            self.logger.info(f"  Batch Size: {self.config.batch_size}")
+            self.logger.info(f"  Context Length: {self.config.context_length}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start server: {e}")
+            return False
+
+    async def test_connection(self) -> bool:
+        """Test if the LLM server is responding."""
+        if not self.server_ready:
+            return False
+            
+        try:
+            response = requests.get(f"{self.base_url}/health")
+            print(f"Health check response: {response.status_code}")
+            if response.status_code == 200:
+                health_data = response.json()
+                print(f"Health data: {health_data}")
+            return response.status_code == 200
+        except requests.exceptions.RequestException as e:
+            print(f"Connection test error: {e}")
+            return False
+
+    async def get_command_suggestion(self, context: str) -> str:
+        """Get command suggestions based on context."""
+        if not self.server_ready:
+            return "Error: Server not ready"
+            
+        try:
+            # Create a focused prompt for command generation
+            prompt = """You are a command line expert. Respond with ONLY the exact command, no explanation.
+
+Examples:
+Q: What command to list all files with details?
+A: ls -la
+
+Q: What command to show current directory?
+A: pwd
+
+Q: What command to create a new directory?
+A: mkdir newfolder
+
+Q: What command to {context}?
+A:"""
+            
+            response = requests.post(
+                f"{self.base_url}/completion",
+                json={
+                    "prompt": prompt.format(context=context),
+                    "n_predict": 10,
+                    "temperature": 0.1,
+                    "top_k": 5,
+                    "top_p": 0.9,
+                    "stop": ["\n", "Q:", "A:", "</s>", "OUT:", "{"],  # Added { to prevent JSON output
+                    "repeat_penalty": 1.1,
+                    "presence_penalty": 0.1,
+                    "frequency_penalty": 0.1,
+                    "cache_prompt": True
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                command = result.get("content", "").strip()
+                
+                # More aggressive cleanup
+                command = command.split('\n')[0]  # Take only first line
+                command = command.split('OUT:')[0]  # Remove OUT: messages
+                command = command.split('{')[0]  # Remove JSON output
+                command = command.strip('`').strip()  # Remove backticks and whitespace
+                
+                # Remove any remaining JSON or log artifacts
+                command = ''.join(c for c in command if not any(x in c for x in ['{', '}', '"']))
+                
+                if len(command) > 0 and not any(x in command for x in ["Error", "Sorry", "I apologize"]):
+                    return command
+                
+                return "Error: Invalid command generated"
+            else:
+                return f"Error: Server returned status {response.status_code}"
+            
+        except Exception as e:
+            print(f"Error in get_command_suggestion: {str(e)}")
+            return "Error: Failed to get command suggestion"
+
+    def stop_server(self) -> None:
+        """Stop the llamafile server."""
+        if self.process:
+            self.process.terminate()
+            self.process = None
+            self.server_ready = False
+            self.client = None
+            print("Server stopped")
+
+    def __del__(self) -> None:
+        """Cleanup on deletion."""
+        self.stop_server()
+
     def analyze_command(self, command: str) -> str:
         """
         Analyze an SSH command.

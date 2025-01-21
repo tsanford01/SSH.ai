@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QFont
+import os
 
 from ..core.llm_manager import LLMConfig
 
@@ -110,6 +111,18 @@ class SettingsDialog(QDialog):
         resource_group = QGroupBox("Resource Settings")
         resource_layout = QFormLayout(resource_group)
         
+        # GPU settings
+        self.gpu_check = QCheckBox("Enable GPU Acceleration")
+        resource_layout.addRow("GPU:", self.gpu_check)
+        
+        self.gpu_layers_spin = QSpinBox()
+        self.gpu_layers_spin.setRange(0, 9999)
+        self.gpu_layers_spin.setValue(9999)
+        self.gpu_layers_spin.setEnabled(False)
+        self.gpu_check.toggled.connect(self.gpu_layers_spin.setEnabled)
+        resource_layout.addRow("GPU Layers:", self.gpu_layers_spin)
+        
+        # CPU settings
         self.max_memory_spin = QSpinBox()
         self.max_memory_spin.setRange(512, 32768)
         self.max_memory_spin.setSingleStep(512)
@@ -121,6 +134,11 @@ class SettingsDialog(QDialog):
         self.max_cpu_spin.setSuffix("%")
         resource_layout.addRow("Max CPU Usage:", self.max_cpu_spin)
         
+        self.threads_spin = QSpinBox()
+        self.threads_spin.setRange(1, os.cpu_count() or 4)
+        self.threads_spin.setValue((os.cpu_count() or 2) - 1)
+        resource_layout.addRow("CPU Threads:", self.threads_spin)
+        
         # Generation settings group
         gen_group = QGroupBox("Generation Settings")
         gen_layout = QFormLayout(gen_group)
@@ -130,10 +148,16 @@ class SettingsDialog(QDialog):
         self.context_length_spin.setSingleStep(256)
         gen_layout.addRow("Context Length:", self.context_length_spin)
         
+        self.batch_size_spin = QSpinBox()
+        self.batch_size_spin.setRange(32, 2048)
+        self.batch_size_spin.setSingleStep(32)
+        self.batch_size_spin.setValue(512)
+        gen_layout.addRow("Batch Size:", self.batch_size_spin)
+        
         self.temperature_spin = QSpinBox()
         self.temperature_spin.setRange(1, 100)
-        self.temperature_spin.setValue(70)  # 0.7
-        gen_layout.addRow("Temperature (÷100):", self.temperature_spin)
+        self.temperature_spin.setSuffix("%")
+        gen_layout.addRow("Temperature:", self.temperature_spin)
         
         # Add groups to layout
         layout.addWidget(model_group)
@@ -227,14 +251,32 @@ class SettingsDialog(QDialog):
         self.model_path_edit.setToolTip(
             self._settings.value("llm/model_path", "")
         )
+        
+        # Resource settings
+        self.gpu_check.setChecked(
+            self._settings.value("llm/use_gpu", True, bool)
+        )
+        self.gpu_layers_spin.setValue(
+            self._settings.value("llm/gpu_layers", 9999, int)
+        )
+        self.gpu_layers_spin.setEnabled(self.gpu_check.isChecked())
+        
         self.max_memory_spin.setValue(
             self._settings.value("llm/max_memory_mb", 2048, int)
         )
         self.max_cpu_spin.setValue(
             self._settings.value("llm/max_cpu_percent", 50, int)
         )
+        self.threads_spin.setValue(
+            self._settings.value("llm/threads", (os.cpu_count() or 2) - 1, int)
+        )
+        
+        # Generation settings
         self.context_length_spin.setValue(
             self._settings.value("llm/context_length", 1024, int)
+        )
+        self.batch_size_spin.setValue(
+            self._settings.value("llm/batch_size", 512, int)
         )
         self.temperature_spin.setValue(
             int(float(self._settings.value("llm/temperature", 0.7)) * 100)
@@ -270,15 +312,22 @@ class SettingsDialog(QDialog):
         # LLM settings
         self._settings.setValue("llm/model", self.model_combo.currentText())
         self._settings.setValue("llm/model_path", self.model_path_edit.toolTip())
+        self._settings.setValue("llm/use_gpu", self.gpu_check.isChecked())
+        self._settings.setValue("llm/gpu_layers", self.gpu_layers_spin.value())
         self._settings.setValue("llm/max_memory_mb", self.max_memory_spin.value())
         self._settings.setValue("llm/max_cpu_percent", self.max_cpu_spin.value())
+        self._settings.setValue("llm/threads", self.threads_spin.value())
         self._settings.setValue("llm/context_length", self.context_length_spin.value())
+        self._settings.setValue("llm/batch_size", self.batch_size_spin.value())
         self._settings.setValue("llm/temperature", self.temperature_spin.value() / 100)
         
         # SSH settings
         self._settings.setValue("ssh/timeout", self.timeout_spin.value())
         self._settings.setValue("ssh/keepalive", self.keepalive_check.isChecked())
-        self._settings.setValue("ssh/keepalive_interval", self.keepalive_interval_spin.value())
+        self._settings.setValue(
+            "ssh/keepalive_interval",
+            self.keepalive_interval_spin.value()
+        )
         self._settings.setValue("ssh/compression", self.compression_check.isChecked())
         
         # UI settings
@@ -300,7 +349,11 @@ class SettingsDialog(QDialog):
             max_memory_mb=self.max_memory_spin.value(),
             max_cpu_percent=self.max_cpu_spin.value(),
             context_length=self.context_length_spin.value(),
-            temperature=self.temperature_spin.value() / 100
+            temperature=self.temperature_spin.value() / 100,
+            use_gpu=self.gpu_check.isChecked(),
+            gpu_layers=self.gpu_layers_spin.value() if self.gpu_check.isChecked() else 0,
+            batch_size=self.batch_size_spin.value(),
+            threads=self.threads_spin.value()
         )
     
     def accept(self) -> None:

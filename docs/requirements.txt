@@ -8,6 +8,7 @@ mkdocs-section-index==0.3.8
 mkdocs-git-revision-date-plugin==0.3.2
 pymdown-extensions==10.3.1
 pygments==2.16.1
-pillow==10.1.0
+pillow==10.3.0
 cairosvg==2.7.1
 mike==1.1.2  # for versioning 
+zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
